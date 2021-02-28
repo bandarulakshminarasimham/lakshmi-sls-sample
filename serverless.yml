@@ -1,0 +1,138 @@
+service: hbo-sample-one
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: dev
+  region: us-east-1
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - "sqs:SendMessage"
+        - "sqs:ReceiveMessage"
+      Resource: "*"
+
+package:
+  include:
+    src/**/!(*.spec).js
+  exclude:
+    - node_modules/**/*
+
+functions:
+  employees:
+    name: 'hbo-employees'
+    handler: 'src/handlers/employees.handler'
+    description: 'Employees information'
+    runtime: nodejs12.x
+    memorySize: 128
+    timeout: 30
+    events:
+      - sqs: 
+         arn: 
+          Fn::GetAtt: [SQSEmployees, Arn]
+          maximumRetryAttempts: 0
+          batchSize: 10
+    environment:
+      SQSPAYROLL:
+        Ref: SQSPayroll
+      TABLEEMPLOYEE: 'hbo-employees'
+        
+  payroll:
+    name: 'hbo-payroll'
+    handler: 'src/handlers/payroll.handler'
+    description: 'Payroll information'
+    runtime: nodejs12.x
+    memorySize: 128
+    timeout: 30
+    events:
+      - sqs: 
+          arn:
+            Fn::GetAtt: [SQSPayroll, Arn]
+          maximumRetryAttempts: 0
+          batchSize: 10
+    environment:
+      SQSREPORTS:
+        Ref: SQSReports
+  reports:
+    name: 'hbo-reporting'
+    handler: 'src/handlers/reports'
+    description: 'Reporting of the employee'
+    runtime: nodejs12.x
+    memorySize: 128
+    timeout: 300
+    events:
+      # runs the lambda for every on 1 min
+      - schedule: cron(0/1 * * * ? *)
+    environment:
+      SQSREPORTS: 
+        Ref: SQSReports
+      TABLE_EMPLOYEE: 'hbo-employees'
+
+resources:
+  Resources:
+    SQSEmployees:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-employees.fifo"
+        VisibilityTimeout: 3600
+        FifoQueue: True
+        ContentBasedDeduplication: True
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [SQSEmployeesDeadLetter, Arn]
+          maxReceiveCount: 1
+    SQSEmployeesDeadLetter:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-employees-dlq.fifo"
+        FifoQueue: True
+        ContentBasedDeduplication: True
+    SQSPayroll:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-payroll.fifo"
+        VisibilityTimeout: 3600
+        FifoQueue: True
+        ContentBasedDeduplication: True
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [SQSPayrollDeadLetter, Arn]
+          maxReceiveCount: 1
+    SQSPayrollDeadLetter:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-payroll-dlq.fifo"
+        FifoQueue: True
+        ContentBasedDeduplication: True
+    SQSReports:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-reports.fifo"
+        VisibilityTimeout: 3600
+        FifoQueue: True
+        ContentBasedDeduplication: True
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [SQSReportsDeadLetter, Arn]
+          maxReceiveCount: 1
+    SQSReportsDeadLetter:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "hbo-reports-dlq.fifo"
+        FifoQueue: True
+        ContentBasedDeduplication: True
+
+    Employees:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+        TableName: 'hbo-employees'
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: name
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+          - AttributeName: name
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST
